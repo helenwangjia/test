@@ -1,0 +1,64 @@
+name: Register tags from Trivy scan result on CI
+on:
+  push:
+    branches:
+      - main
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+jobs:
+  tag_registration:
+    runs-on: ubuntu-latest
+    environment: insertdb
+    strategy:
+      matrix:
+        node-version: [16.x]
+    defaults:
+      run:
+        working-directory: ./
+    steps:
+      - name: Check out code from GitHub
+        uses: actions/checkout@v3
+      - name: Setup node.js environment
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: ./web/package-lock.json
+      - run: npm ci --omit=dev
+        working-directory: ./web
+      - name: Run Trivy scan on CI and output report
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './'
+          list-all-pkgs: true
+          exit-code: 0
+          format: json
+          output: trivy-ci-result.json
+      - name: Upload trivy-ci-result.json as an artifact
+        uses: actions/upload-artifact@v3
+        with:
+          path: ./trivy-ci-result.json
+      - name: Transform CI scan result by trivy_tags.py
+        run : python3 scripts/trivy_tags.py -i trivy-ci-result.json -o entity_tags.jsonl
+      - name: Upload entity_tags.jsonl as an artifact
+        uses: actions/upload-artifact@v3
+        with:
+          path: ./entity_tags.jsonl
+      - name: Get AuthToken from RefreshToken
+        run: |
+          echo "AUTHTOKEN=$(curl -X 'POST' \
+            '${{ secrets.TC_API_URL }}/auth/refresh' \
+            -H 'accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -d '{
+            "refresh_token":  "${{ secrets.THREATCONNECTOME_REFRESHTOKEN }}"
+          }' | jq -r .access_token)" >> $GITHUB_ENV
+      - name: Call Append_Team_Tags API to register tags
+        run: |
+          curl -fX 'POST' \
+            '${{ secrets.TC_API_URL }}/teams/${{ secrets.THREATCONNECTOME_TEAM_ID }}/append_tags' \
+            -H 'Authorization: Bearer ${{ env.AUTHTOKEN }}' \
+            -H 'accept: application/json' \
+            -H 'Content-Type: multipart/form-data' \
+            -F 'file=@entity_tags.jsonl'
