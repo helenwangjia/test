@@ -3,7 +3,9 @@ name: black
 on: pull_request
 
 jobs:
-  lint:
+  deploy:
+    environment:
+      name: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@v3
